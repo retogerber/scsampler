@@ -28,7 +28,10 @@ def resolve_backend(requested: str, X: Any) -> str:
         return "cpu"
     if requested == "gpu":
         if cp is None:
-            raise ImportError("GPU execution requires the optional `cupy` dependency.")
+            raise ImportError(
+                "GPU execution requires the optional `cupy` dependency "
+                "(and `rapids_singlecell` for GPU neighbor-graph construction)."
+            )
         return "gpu"
     if cp is not None and isinstance(X, cp.ndarray):
         return "gpu"
@@ -44,7 +47,10 @@ def to_numpy(X: Any) -> np.ndarray:
 def to_backend_array(X: Any, backend: str) -> Any:
     if backend == "gpu":
         if cp is None:
-            raise ImportError("GPU execution requires the optional `cupy` dependency.")
+            raise ImportError(
+                "GPU execution requires the optional `cupy` dependency "
+                "(and `rapids_singlecell` for GPU neighbor-graph construction)."
+            )
         if issparse(X):
             return cp.asarray(X.toarray())
         return cp.asarray(X)
