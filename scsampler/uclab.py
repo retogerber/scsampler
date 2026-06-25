@@ -4,10 +4,14 @@ from math import sqrt
 from typing import Any
 
 import numpy as np
-from miniball import get_bounding_ball
 from scipy.sparse import csr_matrix, issparse
 
 from .backends import cp, to_numpy
+
+try:
+    from miniball import get_bounding_ball
+except ImportError:  # pragma: no cover - optional dependency
+    get_bounding_ball = None
 
 
 def uclab(X: Any, n: int, alpha: int, rng: np.random.Generator, drop_start: float = 1, drop_rate: float = 0) -> np.ndarray:
@@ -111,6 +115,8 @@ def _scale_matrix(X: Any, rng: np.random.Generator) -> Any:
     sample = to_numpy(_take_rows(X, sample_index))
     radius = 1.0
     try:
+        if get_bounding_ball is None:
+            raise RuntimeError("miniball is unavailable")
         _, r2 = get_bounding_ball(sample)
         radius = sqrt(max(r2, 1e-12))
     except Exception:
@@ -143,8 +149,8 @@ def _update_penalties(X: Any, row_norms: Any, penalties: Any, sample_index: int,
 
 def _distance_penalty(distances: Any, alpha: int, xp: Any) -> Any:
     safe = xp.maximum(distances, 1e-12)
-    penalty = xp.power(safe, -alpha)
-    return xp.clip(penalty, 0.0, 1e30)
+    log_penalty = -float(alpha) * xp.log(safe)
+    return xp.exp(xp.minimum(log_penalty, np.log(1e30)))
 
 
 def _pick_next_index(penalties: Any, blocked: np.ndarray) -> int:
