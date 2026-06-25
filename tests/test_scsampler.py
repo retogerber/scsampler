@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 from anndata import AnnData
@@ -41,8 +42,9 @@ class ScSamplerTests(unittest.TestCase):
             scsampler(self.matrix, fraction=1.5)
 
     def test_gpu_backend_requires_optional_dependency(self):
-        with self.assertRaises(ImportError):
-            scsampler(self.matrix, n_obs=2, backend="gpu", selection_method="exact")
+        with patch("scsampler.backends.cp", None):
+            with self.assertRaises(ImportError):
+                scsampler(self.matrix, n_obs=2, backend="gpu", selection_method="exact")
 
 
 if __name__ == "__main__":

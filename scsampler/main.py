@@ -11,6 +11,10 @@ from sklearn.decomposition import TruncatedSVD
 from .backends import build_neighbor_graph, resolve_backend, to_backend_array
 from .uclab import uclab, uclab_from_graph, uclab_split
 
+
+NEIGHBOR_GRAPH_THRESHOLD = 4096
+MIN_NEIGHBOR_GRAPH_SIZE = 32
+
 def scsampler(
     data: Union[AnnData, np.ndarray, spmatrix, ChunkedArray],
     fraction: Optional[float] = None,
@@ -112,7 +116,7 @@ def _resolve_selection_method(selection_method: str, backend: str, n_obs: int) -
         raise ValueError("`selection_method` must be one of {'auto', 'exact', 'neighbors'}.")
     if selection_method != "auto":
         return selection_method
-    if backend == "gpu" or n_obs >= 4096:
+    if backend == "gpu" or n_obs >= NEIGHBOR_GRAPH_THRESHOLD:
         return "neighbors"
     return "exact"
 
@@ -121,7 +125,7 @@ def _resolve_neighbor_count(n_obs: int, n_neighbors: Optional[int]) -> int:
     if n_obs < 2:
         raise ValueError("Neighbor-graph sampling requires at least two observations.")
     if n_neighbors is None:
-        n_neighbors = min(max(32, int(np.ceil(np.sqrt(n_obs)))), n_obs - 1)
+        n_neighbors = min(max(MIN_NEIGHBOR_GRAPH_SIZE, int(np.ceil(np.sqrt(n_obs)))), n_obs - 1)
     if n_neighbors < 1:
         raise ValueError("`n_neighbors` must be at least 1.")
     return min(int(n_neighbors), n_obs - 1)

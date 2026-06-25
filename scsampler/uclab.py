@@ -14,6 +14,10 @@ except ImportError:  # pragma: no cover - optional dependency
     get_bounding_ball = None
 
 
+MAX_SCALING_SAMPLE_SIZE = 256
+MAX_PENALTY_VALUE = 1e30
+
+
 def uclab(X: Any, n: int, alpha: int, rng: np.random.Generator, drop_start: float = 1, drop_rate: float = 0) -> np.ndarray:
     n_obs = X.shape[0]
     if n < 1 or n > n_obs:
@@ -110,7 +114,7 @@ def uclab_split(
 
 def _scale_matrix(X: Any, rng: np.random.Generator) -> Any:
     n_obs = X.shape[0]
-    sample_size = min(n_obs, 256)
+    sample_size = min(n_obs, MAX_SCALING_SAMPLE_SIZE)
     sample_index = rng.choice(n_obs, size=sample_size, replace=False)
     sample = to_numpy(_take_rows(X, sample_index))
     radius = 1.0
@@ -150,7 +154,7 @@ def _update_penalties(X: Any, row_norms: Any, penalties: Any, sample_index: int,
 def _distance_penalty(distances: Any, alpha: int, xp: Any) -> Any:
     safe = xp.maximum(distances, 1e-12)
     log_penalty = -float(alpha) * xp.log(safe)
-    return xp.exp(xp.minimum(log_penalty, np.log(1e30)))
+    return xp.exp(xp.minimum(log_penalty, np.log(MAX_PENALTY_VALUE)))
 
 
 def _pick_next_index(penalties: Any, blocked: np.ndarray) -> int:

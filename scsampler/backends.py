@@ -16,6 +16,11 @@ except ImportError:  # pragma: no cover - optional dependency
     rsc = None
 
 
+MIN_BLOCK_SIZE = 256
+MAX_BLOCK_SIZE = 2048
+TARGET_BLOCK_ELEMENTS = 1_048_576
+
+
 def resolve_backend(requested: str, X: Any) -> str:
     if requested not in {"auto", "cpu", "gpu"}:
         raise ValueError("`backend` must be one of {'auto', 'cpu', 'gpu'}.")
@@ -113,7 +118,7 @@ def _build_exact_neighbor_graph(
         raise ValueError("Neighbor-graph sampling requires at least two observations.")
     n_neighbors = min(n_neighbors, n_obs - 1)
     if block_size is None:
-        block_size = max(256, min(2048, 1_048_576 // max(1, device_X.shape[1])))
+        block_size = max(MIN_BLOCK_SIZE, min(MAX_BLOCK_SIZE, TARGET_BLOCK_ELEMENTS // max(1, device_X.shape[1])))
 
     if issparse(X) and backend == "cpu":
         row_norms = np.asarray(X.multiply(X).sum(axis=1)).ravel()
