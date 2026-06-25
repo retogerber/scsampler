@@ -2,7 +2,7 @@ import setuptools
 with open("README.md", "r") as fh:
     long_description = fh.read()
 setuptools.setup(
-    name="scsampler", # Replace with your own username
+    name="scsampler",
     version="1.0.1",
     author="Dongyuan Song",
     author_email="dongyuansong@ucla.edu",
@@ -11,6 +11,19 @@ setuptools.setup(
     long_description_content_type="text/markdown",
     url="https://github.com/SONGDONGYUAN1994/scsampler",
     packages=setuptools.find_packages(),
+    install_requires=[
+        "anndata",
+        "miniball",
+        "numpy",
+        "pyarrow",
+        "scikit-learn",
+        "scipy",
+    ],
+    extras_require={
+        "gpu": [
+            "rapids-singlecell>=0.11",
+        ],
+    },
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",

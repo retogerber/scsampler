@@ -1,12 +1,18 @@
 # scSampler
 
 ## Overview
-`scSampler` is a Python pacakge for fast diversity-preserving subsampling of large-scale single-cell transcriptomic data.
+`scSampler` is a Python package for diversity-preserving subsampling of large-scale single-cell transcriptomic data, with CPU and optional GPU-accelerated execution paths.
 
 ## Installation
 Please install it from PyPI:
 ``` python
 pip install scsampler
+```
+
+For GPU-focused workflows, install the optional RAPIDS dependencies in a compatible CUDA environment:
+
+```python
+pip install "scsampler[gpu]"
 ```
 
 ## Quick start
@@ -32,19 +38,31 @@ Subsample 10% cells and return a new anndata. The space is top PCs.
 ```{python}
 adata_sub = scsampler(adata, fraction = 0.1, copy = True) 
 ```
-If you want to speed it up, you can use the `random_split`. It will lead to slightly less optimal result, of course.
+
+For larger datasets, the sampler can switch to a sparse neighbor-graph approximation to reduce repeated all-pairs distance work:
+
 ```{python}
 start = time()
-adata_sub = scsampler(adata, fraction = 0.1, obsm = 'X_pca', copy = True, random_split = 16)
+adata_sub = scsampler(
+    adata,
+    fraction=0.1,
+    obsm="X_pca",
+    copy=True,
+    backend="auto",
+    selection_method="neighbors",
+    n_neighbors=64,
+)
 end = time()
 print(end - start)
 ```
+
+If a RAPIDS stack is available, `backend="gpu"` moves the heavy neighbor-graph construction to the GPU through `rapids_singlecell.pp.neighbors`.
 ### matrix as input
 You can also use the `numpy.ndarray` as the input.
 ```{python}
 mat = adata.obsm['X_pca']
 print(type(mat))
-res = scsampler(mat, fraction = 0.1, copy = True, random_split = 16)
+res = scsampler(mat, fraction = 0.1, copy = True, selection_method = "neighbors", n_neighbors = 64)
 subsample_index = res[1]
 subsample_mat = res[0]
 ```

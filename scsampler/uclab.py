@@ -1,84 +1,184 @@
-import numpy as np
-from scipy.spatial import distance
-from scipy.sparse import issparse, isspmatrix_csr, csr_matrix, spmatrix
-from miniball import get_bounding_ball
+from __future__ import annotations
+
 from math import sqrt
-import sys
+from typing import Any
 
-def uclab(X, n, alpha, drop_start=1, drop_rate=0):
-    N = X.shape[0]
-    sample_index = np.full(n, -1, dtype=int)
-    distances = np.full(N, -1)
-    
-    # Define function
-    #int64 = np.int64
-    
-    # Normalize the input matrix by bound sphere of a small subset to avoid the overflow in distance calculation.
-    radius_index = np.random.randint(N, size=100)
-    Center_pos, r2 = get_bounding_ball(X[radius_index,:])
-    r = sqrt(r2)
-    X = X/r
-    # step 0
-    initial_index = np.random.randint(N, size=1)
-    sample_index[0] = initial_index
-    distances = distance.cdist(np.expand_dims(X[sample_index[0],:], axis=0), X).flatten()
-    distances[initial_index] = -1
-    d_index = np.argwhere(distances != -1).flatten()
-    distances[d_index] = np.power(1/distances[d_index], alpha)
-    
-    if np.count_nonzero(distances[d_index]) < N-1:
-        sys.exit("The alpha is too large and distance calculation gets an overflow. Please decrease alpha or normalize your data.")
-    
-    
-    for i in np.arange(1,n):
-        #print(i, end=' ')
-        # drop large points
-        if i == np.int64(drop_start*n) and drop_rate != 0:
-            current_number = np.count_nonzero(distances!=-1)
-            drop_number = np.int64(current_number*drop_rate)        
-            left_number = current_number - drop_number
-            more_number = n - i
-            # if drop too many, then return current best
-            if more_number > left_number:
-                drop_number = current_number - more_number
-                sort_index = np.argsort(distances) 
-                drop_index = sort_index[-drop_number:]
-                distances[drop_index] = -1
-                keep_index = np.where(distances != -1)[0]
-                sample_index[i:] = keep_index
-                return sample_index      
-            sort_index = np.argsort(distances)            
-            drop_index = sort_index[-drop_number:]
-            distances[drop_index] = -1
-        closest_index = np.where(distances > 0, distances, np.inf).argmin()
-        sample_index[i] = closest_index
-        distances[closest_index] = -1
-        d_index = np.argwhere(distances != -1).flatten()
-        d = distance.cdist(np.expand_dims(X[sample_index[i],:], axis=0), X[d_index,:]).flatten()
-        d = np.power(1/d, alpha)
-        distances[d_index] += d     
+import numpy as np
+from miniball import get_bounding_ball
+from scipy.sparse import csr_matrix, issparse
+
+from .backends import cp, to_numpy
+
+
+def uclab(X: Any, n: int, alpha: int, rng: np.random.Generator, drop_start: float = 1, drop_rate: float = 0) -> np.ndarray:
+    n_obs = X.shape[0]
+    if n < 1 or n > n_obs:
+        raise ValueError("`n` must be between 1 and the number of observations.")
+
+    xp = cp if cp is not None and isinstance(X, cp.ndarray) else np
+    scaled_X = _scale_matrix(X, rng)
+    row_norms = _row_norms(scaled_X, xp)
+    penalties = xp.zeros(n_obs, dtype=xp.float64)
+    blocked = np.zeros(n_obs, dtype=bool)
+    sample_index = np.empty(n, dtype=np.int64)
+
+    next_index = int(rng.integers(n_obs))
+    drop_step = int(drop_start * n)
+
+    for i in range(n):
+        if blocked[next_index]:
+            next_index = _pick_next_index(penalties, blocked)
+        sample_index[i] = next_index
+        blocked[next_index] = True
+        penalties = _set_value(penalties, np.array([next_index]), xp.inf, xp)
+        penalties = _update_penalties(scaled_X, row_norms, penalties, next_index, alpha, xp)
+        penalties = _set_value(penalties, np.array([next_index]), xp.inf, xp)
+
+        if drop_rate and i + 1 == drop_step:
+            penalties, blocked = _drop_candidates(penalties, blocked, n_remaining=n - (i + 1), drop_rate=drop_rate, xp=xp)
+        if i + 1 < n:
+            next_index = _pick_next_index(penalties, blocked)
+
     return sample_index
 
 
-def uclab_split(X, n, alpha, drop_start=1, drop_rate=0, split=4):
-    # random shuffle index
-    #np.random.seed(seed)
-    index = np.arange(X.shape[0])
-    np.random.shuffle(index)
-    X = X[index,]
-    # subsample per split
-    X_list = np.array_split(X, split, axis=0)
-    n_list = np.array_split(np.arange(n), split, axis=0)
-    sample_index_list = [uclab(d, len(n_split), alpha, drop_start, drop_rate) for n_split, d in zip(n_list, X_list)]    
-    # adjust split index
-    sample_index_list_adjust = []
-    adjust = 0
-    for i, l in enumerate(sample_index_list):
-        if i > 0:
-            adjust += len(X_list[i-1])
-            l = l + adjust
-        sample_index_list_adjust.append(l)
-    sample_index = np.concatenate(sample_index_list_adjust)
-    # get original index
-    sample_index = index[sample_index]
+def uclab_from_graph(graph: csr_matrix, n: int, alpha: int, rng: np.random.Generator) -> np.ndarray:
+    n_obs = graph.shape[0]
+    if n < 1 or n > n_obs:
+        raise ValueError("`n` must be between 1 and the number of observations.")
+
+    graph = graph.tocsr()
+    penalties = np.zeros(n_obs, dtype=np.float64)
+    blocked = np.zeros(n_obs, dtype=bool)
+    sample_index = np.empty(n, dtype=np.int64)
+
+    next_index = int(rng.integers(n_obs))
+    for i in range(n):
+        if blocked[next_index]:
+            next_index = _pick_next_index(penalties, blocked)
+        sample_index[i] = next_index
+        blocked[next_index] = True
+        penalties[next_index] = np.inf
+
+        start, stop = graph.indptr[next_index], graph.indptr[next_index + 1]
+        neighbors = graph.indices[start:stop]
+        distances = graph.data[start:stop]
+        if distances.size:
+            penalties[neighbors] += _distance_penalty(distances, alpha, np)
+        penalties[next_index] = np.inf
+
+        if i + 1 < n:
+            next_index = _pick_next_index(penalties, blocked)
+
     return sample_index
+
+
+def uclab_split(
+    X: Any,
+    n: int,
+    alpha: int,
+    rng: np.random.Generator,
+    drop_start: float = 1,
+    drop_rate: float = 0,
+    split: int = 4,
+) -> np.ndarray:
+    if split <= 1 or n <= 1:
+        return uclab(X, n, alpha, rng=rng, drop_start=drop_start, drop_rate=drop_rate)
+
+    shuffled_index = rng.permutation(X.shape[0])
+    counts = [n // split] * split
+    for i in range(n % split):
+        counts[i] += 1
+
+    selected_parts = []
+    offset = 0
+    for part_index, chunk_index in enumerate(np.array_split(shuffled_index, split)):
+        count = counts[part_index]
+        if count == 0 or chunk_index.size == 0:
+            continue
+        chunk = X[chunk_index]
+        local = uclab(chunk, count, alpha, rng=rng, drop_start=drop_start, drop_rate=drop_rate)
+        selected_parts.append(chunk_index[local])
+        offset += len(chunk_index)
+
+    return np.concatenate(selected_parts)
+
+
+def _scale_matrix(X: Any, rng: np.random.Generator) -> Any:
+    n_obs = X.shape[0]
+    sample_size = min(n_obs, 256)
+    sample_index = rng.choice(n_obs, size=sample_size, replace=False)
+    sample = to_numpy(_take_rows(X, sample_index))
+    radius = 1.0
+    try:
+        _, r2 = get_bounding_ball(sample)
+        radius = sqrt(max(r2, 1e-12))
+    except Exception:
+        centered = sample - sample.mean(axis=0, keepdims=True)
+        radius = max(np.linalg.norm(centered, axis=1).max(initial=1.0), 1.0)
+    radius = max(radius, 1.0)
+    return X / radius
+
+
+def _row_norms(X: Any, xp: Any) -> Any:
+    if issparse(X):
+        return np.asarray(X.multiply(X).sum(axis=1)).ravel()
+    return xp.sum(X * X, axis=1)
+
+
+def _update_penalties(X: Any, row_norms: Any, penalties: Any, sample_index: int, alpha: int, xp: Any) -> Any:
+    if issparse(X):
+        point = np.asarray(X[sample_index].toarray()).ravel()
+        distances_sq = row_norms + row_norms[sample_index] - 2 * np.asarray(X @ point).ravel()
+        distances_sq = np.maximum(distances_sq, 0.0)
+        penalties += _distance_penalty(np.sqrt(distances_sq), alpha, np)
+        return penalties
+
+    point = X[sample_index]
+    distances_sq = row_norms + row_norms[sample_index] - 2 * (X @ point)
+    distances_sq = xp.maximum(distances_sq, 0.0)
+    penalties += _distance_penalty(xp.sqrt(distances_sq), alpha, xp)
+    return penalties
+
+
+def _distance_penalty(distances: Any, alpha: int, xp: Any) -> Any:
+    safe = xp.maximum(distances, 1e-12)
+    penalty = xp.power(safe, -alpha)
+    return xp.clip(penalty, 0.0, 1e30)
+
+
+def _pick_next_index(penalties: Any, blocked: np.ndarray) -> int:
+    if blocked.all():
+        raise ValueError("No observations remain available for selection.")
+    candidate = int(np.argmin(to_numpy(penalties)))
+    if not blocked[candidate]:
+        return candidate
+    available = np.flatnonzero(~blocked)
+    return int(available[0])
+
+
+def _drop_candidates(penalties: Any, blocked: np.ndarray, n_remaining: int, drop_rate: float, xp: Any) -> tuple[Any, np.ndarray]:
+    available = np.flatnonzero(~blocked)
+    if available.size <= n_remaining:
+        return penalties, blocked
+    drop_number = min(int(available.size * drop_rate), available.size - n_remaining)
+    if drop_number <= 0:
+        return penalties, blocked
+    penalty_values = to_numpy(penalties)[available]
+    drop_local = np.argsort(penalty_values)[-drop_number:]
+    drop_index = available[drop_local]
+    blocked[drop_index] = True
+    penalties = _set_value(penalties, drop_index, xp.inf, xp)
+    return penalties, blocked
+
+
+def _set_value(values: Any, indices: np.ndarray, fill_value: float, xp: Any) -> Any:
+    if xp is np:
+        values[indices] = fill_value
+        return values
+    values[xp.asarray(indices)] = fill_value
+    return values
+
+
+def _take_rows(X: Any, index: np.ndarray) -> Any:
+    return X[index]
