@@ -56,6 +56,12 @@ def uclab_from_graph(graph: csr_matrix, n: int, alpha: int, rng: np.random.Gener
         raise ValueError("`n` must be between 1 and the number of observations.")
 
     graph = graph.tocsr()
+    # Precompute penalty values for every edge once so the main loop avoids
+    # repeated per-iteration _distance_penalty calls over the same edge set.
+    edge_penalties = _distance_penalty(graph.data, alpha, np)
+    indptr = graph.indptr
+    indices = graph.indices
+
     penalties = np.zeros(n_obs, dtype=np.float64)
     blocked = np.zeros(n_obs, dtype=bool)
     sample_index = np.empty(n, dtype=np.int64)
@@ -68,11 +74,9 @@ def uclab_from_graph(graph: csr_matrix, n: int, alpha: int, rng: np.random.Gener
         blocked[next_index] = True
         penalties[next_index] = np.inf
 
-        start, stop = graph.indptr[next_index], graph.indptr[next_index + 1]
-        neighbors = graph.indices[start:stop]
-        distances = graph.data[start:stop]
-        if distances.size:
-            penalties[neighbors] += _distance_penalty(distances, alpha, np)
+        start, stop = indptr[next_index], indptr[next_index + 1]
+        if stop > start:
+            penalties[indices[start:stop]] += edge_penalties[start:stop]
         penalties[next_index] = np.inf
 
         if i + 1 < n:

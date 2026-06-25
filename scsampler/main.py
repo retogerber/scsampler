@@ -5,7 +5,7 @@ from typing import Any, Optional, Union
 import numpy as np
 from anndata import AnnData
 from pyarrow import ChunkedArray
-from scipy.sparse import coo_matrix, spmatrix
+from scipy.sparse import coo_matrix, issparse, spmatrix
 from sklearn.decomposition import TruncatedSVD
 
 from .backends import build_neighbor_graph, resolve_backend, to_backend_array
@@ -53,17 +53,22 @@ def scsampler(
         resolved_backend = resolve_backend(backend, X)
         method = _resolve_selection_method(selection_method, resolved_backend, old_n_obs)
         if method == "neighbors":
-            neighbor_count = _resolve_neighbor_count(old_n_obs, n_neighbors)
-            graph = build_neighbor_graph(
-                X,
-                n_neighbors=neighbor_count,
-                backend=resolved_backend,
-                metric=metric,
-                random_state=random_state,
-                algorithm=neighbor_algorithm,
-                algorithm_kwds=neighbor_algorithm_kwds,
-                block_size=block_size,
-            )
+            if isinstance(data, AnnData) and "distances" in data.obsp:
+                graph = data.obsp["distances"]
+                if not issparse(graph) or graph.format != "csr":
+                    graph = graph.tocsr()
+            else:
+                neighbor_count = _resolve_neighbor_count(old_n_obs, n_neighbors)
+                graph = build_neighbor_graph(
+                    X,
+                    n_neighbors=neighbor_count,
+                    backend=resolved_backend,
+                    metric=metric,
+                    random_state=random_state,
+                    algorithm=neighbor_algorithm,
+                    algorithm_kwds=neighbor_algorithm_kwds,
+                    block_size=block_size,
+                )
             obs_indices = uclab_from_graph(graph, new_n_obs, alpha=alpha, rng=rng)
         else:
             split = 1 if random_split is None else random_split
